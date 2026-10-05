@@ -1,0 +1,17 @@
+# Ambiente Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Dados coletados: gerados rodando scrape/analyze, não versionados
+# (ver README.md para regenerar). Mantemos a pasta via .gitkeep.
+data/*.json
+!data/.gitkeep
+
+# Diversos
+.DS_Store
+.pytest_cache/
