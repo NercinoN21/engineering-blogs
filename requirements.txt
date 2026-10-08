@@ -1,0 +1,11 @@
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+selenium>=4.20
+tinydb>=4.8
+feedparser>=6.0
+spacy>=3.8
+
+# Depois de instalar, baixe o modelo de inglês do spaCy (comando separado,
+# não é um pacote pip comum):
+#   python -m spacy download en_core_web_sm
