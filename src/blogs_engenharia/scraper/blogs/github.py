@@ -10,6 +10,8 @@ Ver a explicação da técnica (API REST do WordPress) em
 `_wordpress_common.py`.
 """
 
+import requests
+
 from .. import config
 from ._wordpress_common import collect_from_wp_rest_api
 
@@ -18,7 +20,12 @@ API_URL = "https://github.blog/wp-json/wp/v2/posts"
 CATEGORIA_ENGINEERING = 72
 
 
-def collect(db, cutoff_date=config.CUTOFF_DATE) -> int:
+def collect(db, cutoff_date=config.CUTOFF_DATE, session: requests.Session | None = None) -> int:
     return collect_from_wp_rest_api(
-        db, NOME_EMPRESA, API_URL, cutoff_date, extra_params={"categories": CATEGORIA_ENGINEERING}
+        db,
+        NOME_EMPRESA,
+        API_URL,
+        cutoff_date,
+        extra_params={"categories": CATEGORIA_ENGINEERING},
+        session=session,
     )
