@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blogs-engenharia"
+version = "0.1.0"
+description = "Coleta e análise de convergência/divergência temática entre blogs de engenharia de grandes empresas de tecnologia (UFPB - Modelagem de Dados Não Estruturados)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "selenium>=4.20",
+    "tinydb>=4.8",
+    "feedparser>=6.0",
+    "spacy>=3.8",
+]
+
+# Depois de instalar, baixe o modelo de inglês do spaCy (comando separado,
+# não é um pacote pip comum):
+#   python -m spacy download en_core_web_sm
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+blogs-engenharia-scrape = "blogs_engenharia.cli.scrape:main"
+blogs-engenharia-analyze = "blogs_engenharia.cli.analyze:main"
+blogs-engenharia-stats = "blogs_engenharia.cli.stats:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blogs_engenharia"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

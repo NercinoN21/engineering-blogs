@@ -23,7 +23,7 @@ quem já manja), veja
 | Slack     | 78           | API REST do WordPress                      |
 | **Total** | **1157**     |                                               |
 
-Todos dentro da janela de 5 anos (2021–2026). Rode `python -m blogs_engenharia.cli.stats`
+Todos dentro da janela de 5 anos (2021–2026). Rode `blogs-engenharia-stats`
 para ver esses números atualizados (contagem por ano, tamanho médio de
 conteúdo, e um alerta automático se algum post tiver conteúdo
 suspeitosamente curto — útil pra pegar erro de extração).
@@ -127,7 +127,7 @@ código (não só ignorados):
    e `scraper/blogs/{uber,spotify,shopify}.py` descartam qualquer post
    com menos de 150 caracteres de conteúdo extraído.
 
-`python -m blogs_engenharia.cli.stats` reaplica essa mesma checagem nos
+`blogs-engenharia-stats` reaplica essa mesma checagem nos
 dados já salvos, como uma segunda linha de defesa.
 
 ## Como rodar
@@ -135,7 +135,7 @@ dados já salvos, como uma segunda linha de defesa.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt   # tinydb, feedparser, lxml, selenium, bs4, requests
+pip install -e ".[dev]"
 python -m spacy download en_core_web_sm
 
 # Selenium precisa do Google Chrome instalado (o driver é baixado
@@ -143,10 +143,11 @@ python -m spacy download en_core_web_sm
 # chromedriver à parte):
 #   brew install --cask google-chrome
 
-PYTHONPATH=src python -m blogs_engenharia.cli.scrape                     # roda os 7 blogs
-PYTHONPATH=src python -m blogs_engenharia.cli.scrape --blogs slack meta  # roda só alguns
-PYTHONPATH=src python -m blogs_engenharia.cli.scrape --list              # lista os blogs válidos
-PYTHONPATH=src python -m blogs_engenharia.cli.stats                      # resumo do que foi coletado
+blogs-engenharia-scrape                     # roda os 7 blogs
+blogs-engenharia-scrape --blogs slack meta  # roda só alguns
+blogs-engenharia-scrape --list              # lista os blogs válidos
+blogs-engenharia-stats                      # resumo do que foi coletado
+pytest                                       # roda os testes
 ```
 
 Rodar de novo não duplica posts: cada post é salvo com `upsert` usando a
@@ -161,8 +162,8 @@ versão mais simples — mas já concreta — da pergunta de pesquisa do tema: o
 blogs convergem ou divergem ao longo do tempo?
 
 ```bash
-PYTHONPATH=src python -m blogs_engenharia.cli.analyze              # processa os 1157 posts (~5 minutos)
-PYTHONPATH=src python -m blogs_engenharia.cli.analyze --limite 50  # só os 50 primeiros, pra testar rápido
+blogs-engenharia-analyze              # processa os 1157 posts (~5 minutos)
+blogs-engenharia-analyze --limite 50  # só os 50 primeiros, pra testar rápido
 ```
 
 **O que o RE faz** (`nlp/preprocess.py`): limpa URLs/e-mails antes de
