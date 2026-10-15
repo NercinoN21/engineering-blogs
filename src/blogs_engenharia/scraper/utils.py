@@ -110,7 +110,17 @@ def make_driver():
 
     Selenium 4.6+ baixa o chromedriver sozinho (Selenium Manager), então
     não é preciso instalar nada manualmente além do Google Chrome.
+
+    Dentro do container Docker usamos Chromium (não Google Chrome) e o
+    binário não fica no caminho padrão — por isso a imagem define a
+    variável `CHROME_BIN` (ver Dockerfile) e lemos ela aqui. Fora do
+    Docker a variável simplesmente não existe e o Selenium acha o Chrome
+    sozinho, como antes. `--no-sandbox`/`--disable-dev-shm-usage` são
+    exigidos pelo Chrome headless rodando como root em container, e são
+    inofensivos fora dele.
     """
+    import os
+
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
 
@@ -119,4 +129,9 @@ def make_driver():
     options.add_argument(f"--window-size={config.SELENIUM_WINDOW_SIZE}")
     options.add_argument("--lang=en-US")
     options.add_argument(f"user-agent={config.USER_AGENT}")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    chrome_bin = os.environ.get("CHROME_BIN")
+    if chrome_bin:
+        options.binary_location = chrome_bin
     return webdriver.Chrome(options=options)

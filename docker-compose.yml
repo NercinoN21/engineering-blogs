@@ -1,0 +1,18 @@
+services:
+  scrape:
+    build: .
+    volumes:
+      - ./data:/app/data
+    command: ["blogs-engenharia-scrape"]
+
+  analyze:
+    build: .
+    volumes:
+      - ./data:/app/data
+    command: ["blogs-engenharia-analyze"]
+
+  stats:
+    build: .
+    volumes:
+      - ./data:/app/data
+    command: ["blogs-engenharia-stats"]

@@ -154,6 +154,20 @@ Rodar de novo não duplica posts: cada post é salvo com `upsert` usando a
 URL como chave (`scraper/database.py`), então o script pode ser
 interrompido e reexecutado sem problema.
 
+### Com Docker
+
+```bash
+docker compose run --rm scrape     # coleta os 7 blogs
+docker compose run --rm analyze    # roda a análise de PLN
+docker compose run --rm stats      # resumo do que foi coletado
+```
+
+Os três serviços montam `./data` como volume, então o `posts.json`
+gerado dentro do container fica disponível no host em `data/posts.json`
+(o arquivo não é versionado no git — ver `.gitignore`). A imagem já
+inclui Chromium (para os coletores com Selenium: Uber e Spotify) e o
+modelo `en_core_web_sm` do spaCy.
+
 ## Análise de PLN (RE + spaCy)
 
 Depois de coletados, os posts são analisados com **expressões
@@ -205,35 +219,42 @@ Os resultados ficam salvos em 4 tabelas novas no mesmo `data/posts.json`
 }
 ```
 
-## Estrutura do código
+## Estrutura do projeto
 
-Este diretório (`blogs-engenharia/`) é o pacote em si. `docs/` e
-`CLAUDE.md` ficam um nível acima, fora do pacote.
+Este diretório (`blogs-engenharia/`) é o pacote em si — tem seu próprio
+git e é a raiz usada pelo Docker. `docs/`, `examples/` e `CLAUDE.md`
+ficam um nível acima, fora do pacote (ver `../docs/`, `../examples/`).
 
 ```
-src/blogs_engenharia/
-  scraper/
-    config.py            # janela temporal, caminhos, cabeçalhos HTTP
-    database.py           # abre o TinyDB e faz upsert sem duplicar
-    utils.py               # sessão requests, driver Selenium, limpeza de texto
-    blogs/
-      _wordpress_common.py  # paginação da API REST do WordPress (Meta/Microsoft/GitHub/Slack)
-      meta.py                 # engineering.fb.com
-      microsoft.py             # devblogs.microsoft.com/ise
-      github.py                 # github.blog, categoria Engineering
-      slack.py                   # slack.engineering
-      shopify.py                  # feed Atom + BeautifulSoup
-      spotify.py                   # Selenium (load more) + BeautifulSoup
-      uber.py                       # Selenium (paginação) + BeautifulSoup
-  nlp/
-    preprocess.py            # limpeza + extração de siglas via RE
-    pipeline.py                # tagging/lematização/NER via spaCy
-    aggregate.py                 # agregação por empresa/ano, Jaccard, termos quentes
-  cli/
-    scrape.py               # orquestrador da coleta
-    analyze.py                # orquestrador da análise de PLN
-    stats.py                    # conferência rápida pós-coleta
-data/posts.json           # banco TinyDB (posts + resultados de PLN)
+.
+├── pyproject.toml           # empacotamento, dependências, console scripts
+├── Dockerfile
+├── docker-compose.yml
+├── src/
+│   └── blogs_engenharia/
+│       ├── scraper/
+│       │   ├── config.py            # janela temporal, caminhos, cabeçalhos HTTP
+│       │   ├── database.py           # abre o TinyDB e faz upsert sem duplicar
+│       │   ├── utils.py               # sessão requests, driver Selenium, limpeza de texto
+│       │   └── blogs/
+│       │       ├── _wordpress_common.py  # paginação da API REST do WordPress
+│       │       ├── meta.py                 # engineering.fb.com
+│       │       ├── microsoft.py             # devblogs.microsoft.com/ise
+│       │       ├── github.py                 # github.blog, categoria Engineering
+│       │       ├── slack.py                   # slack.engineering
+│       │       ├── shopify.py                  # feed Atom + BeautifulSoup
+│       │       ├── spotify.py                   # Selenium (load more) + BeautifulSoup
+│       │       └── uber.py                       # Selenium (paginação) + BeautifulSoup
+│       ├── nlp/
+│       │   ├── preprocess.py            # limpeza + extração de siglas via RE
+│       │   ├── pipeline.py                # tagging/lematização/NER via spaCy
+│       │   └── aggregate.py                 # agregação por empresa/ano, Jaccard, termos quentes
+│       └── cli/
+│           ├── scrape.py          # orquestrador da coleta (blogs-engenharia-scrape)
+│           ├── analyze.py          # orquestrador da análise de PLN (blogs-engenharia-analyze)
+│           └── stats.py             # conferência rápida pós-coleta (blogs-engenharia-stats)
+├── tests/                   # testes unitários (pytest), sem rede real
+└── data/posts.json          # banco TinyDB (posts + resultados de PLN) — gerado, não versionado
 ```
 
 ## Próximos passos (fora do escopo desta entrega)
