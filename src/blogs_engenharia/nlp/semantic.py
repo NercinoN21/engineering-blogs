@@ -1,0 +1,68 @@
+"""Agregação e métricas da análise semântica (etapa 2): combina os
+embeddings e sentimentos post a post em estatísticas por empresa/ano, e
+calcula a versão semântica da matriz de convergência da etapa 1.
+
+Como `aggregate.py` (etapa 1), este módulo é só matemática pura sobre
+dados já calculados — nenhuma chamada a modelo aqui, pra poder testar
+rápido com vetores/números falsos (ver `tests/test_semantic.py`).
+"""
+
+from collections import defaultdict
+
+import numpy as np
+
+
+def centroide_por_empresa(registros: list[dict]) -> dict[str, np.ndarray]:
+    """Vetor médio (centróide) dos embeddings de cada empresa.
+
+    O centróide resume "sobre o que a empresa fala, em média" num único
+    ponto do espaço semântico — é o que comparamos entre empresas na
+    matriz de convergência semântica, análogo ao top-50 de termos usado
+    na Jaccard da etapa 1.
+    """
+    por_empresa = defaultdict(list)
+    for r in registros:
+        por_empresa[r["empresa"]].append(r["embedding"])
+    return {empresa: np.mean(vetores, axis=0) for empresa, vetores in por_empresa.items()}
+
+
+def similaridade_cosseno(a: np.ndarray, b: np.ndarray) -> float:
+    """Similaridade de cosseno entre dois vetores.
+
+    1 = mesma direção (mesmo assunto, em significado), 0 = direções
+    perpendiculares (assuntos não relacionados). Diferente da Jaccard da
+    etapa 1, não exige palavra idêntica — só proximidade de sentido.
+    """
+    norma_a, norma_b = np.linalg.norm(a), np.linalg.norm(b)
+    if norma_a == 0 or norma_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norma_a * norma_b))
+
+
+def matriz_convergencia_semantica(centroides: dict[str, np.ndarray]) -> dict[tuple[str, str], float]:
+    """Similaridade de cosseno entre os centróides de cada par de empresas.
+
+    Versão semântica da `matriz_convergencia` (Jaccard) da etapa 1: mede
+    convergência por significado em vez de por palavra exata.
+    """
+    empresas = sorted(centroides)
+    matriz = {}
+    for i, a in enumerate(empresas):
+        for b in empresas[i:]:
+            matriz[(a, b)] = similaridade_cosseno(centroides[a], centroides[b])
+    return matriz
+
+
+def sentimento_medio_por_empresa_ano(registros: list[dict]) -> dict[tuple[str, str], float]:
+    """Score médio de sentimento (-1 a 1) por empresa e ano.
+
+    Cada post entra como +score se "POSITIVE", -score se "NEGATIVE" — a
+    média por empresa/ano mostra se o tom predominante é positivo ou
+    negativo naquele período. Complementa `evolucao_termos` da etapa 1,
+    que mostra SOBRE O QUE se fala, não COM QUE TOM.
+    """
+    por_empresa_ano = defaultdict(list)
+    for r in registros:
+        sinal = 1.0 if r["sentimento_label"] == "POSITIVE" else -1.0
+        por_empresa_ano[(r["empresa"], r["ano"])].append(sinal * r["sentimento_score"])
+    return {chave: sum(v) / len(v) for chave, v in por_empresa_ano.items()}
