@@ -147,6 +147,8 @@ blogs-engenharia-scrape                     # roda os 7 blogs
 blogs-engenharia-scrape --blogs slack meta  # roda só alguns
 blogs-engenharia-scrape --list              # lista os blogs válidos
 blogs-engenharia-stats                      # resumo do que foi coletado
+blogs-engenharia-analyze                    # etapa 1: RE + spaCy (termos, Jaccard)
+blogs-engenharia-semantic                   # etapa 2: embeddings + sentimento
 pytest                                       # roda os testes
 ```
 
@@ -158,15 +160,18 @@ interrompido e reexecutado sem problema.
 
 ```bash
 docker compose run --rm scrape     # coleta os 7 blogs
-docker compose run --rm analyze    # roda a análise de PLN
+docker compose run --rm analyze    # etapa 1: RE + spaCy (termos, Jaccard)
+docker compose run --rm semantic   # etapa 2: embeddings + sentimento
 docker compose run --rm stats      # resumo do que foi coletado
 ```
 
-Os três serviços montam `./data` como volume, então o `posts.json`
+Os serviços montam `./data` como volume, então o `posts.json`
 gerado dentro do container fica disponível no host em `data/posts.json`
 (o arquivo não é versionado no git — ver `.gitignore`). A imagem já
 inclui Chromium (para os coletores com Selenium: Uber e Spotify) e o
-modelo `en_core_web_sm` do spaCy.
+modelo `en_core_web_sm` do spaCy. Os modelos de embeddings/sentimento da
+etapa 2 são baixados por `sentence-transformers`/`transformers` na
+primeira execução do serviço `semantic` (precisa de internet nessa hora).
 
 ## Análise de PLN (RE + spaCy)
 
@@ -205,6 +210,72 @@ lematizados (ex.: "scaling"/"scaled" viram "scale"), sem stopwords.
 Os resultados ficam salvos em 4 tabelas novas no mesmo `data/posts.json`
 (`nlp_termos_por_post`, `nlp_resumo_empresa`, `nlp_convergencia`,
 `nlp_evolucao_termos`) e também são impressos no terminal ao rodar.
+
+## Análise semântica e de sentimento (etapa 2)
+
+A etapa 1 mede convergência por **palavra exata**: duas empresas só
+"convergem" na Jaccard se usarem os mesmos termos lematizados. Isso
+esconde casos óbvios pra qualquer leitor humano, mas invisíveis pra
+contagem de palavras — "database" e "storage engine" são assuntos
+parecidos, mas contam como termos totalmente diferentes. A etapa 2
+troca contagem de palavras por **significado**: usa embeddings pra
+comparar posts por proximidade semântica, e acrescenta uma dimensão que
+a etapa 1 nem tentava medir — o **tom** (sentimento) das discussões.
+
+```bash
+blogs-engenharia-semantic              # processa os 1157 posts (~15-20 minutos na 1ª vez)
+blogs-engenharia-semantic --limite 50  # só os 50 primeiros, pra testar rápido
+```
+
+Mais lento que a etapa 1: baixa e roda dois modelos transformer (na
+primeira execução; depois ficam em cache). O `--limite` existe
+justamente pra isso — rodar o pipeline inteiro em poucos posts antes de
+soltar o processamento completo.
+
+**Resumo de cada post** (`nlp/resumo.py`): em vez de mandar o post
+inteiro pros modelos (lento e desnecessário), um pipeline spaCy *em
+branco* — só com o componente `sentencizer`, sem o modelo estatístico
+da etapa 1 — separa as frases e pega as 3 primeiras. O começo de um
+post técnico já concentra o assunto e o tom geral, mesma lógica do
+truncamento em `preprocess.py::limpar_para_nlp`.
+
+**Embeddings** (`nlp/embeddings.py`): `sentence-transformers` com o
+modelo `all-MiniLM-L6-v2` transforma cada resumo num vetor de 384
+dimensões. Dois posts com o mesmo *significado*, mesmo usando palavras
+diferentes, ficam com vetores próximos — algo que a Jaccard da etapa 1
+não enxerga.
+
+**Sentimento** (`nlp/sentiment.py`): o pipeline `sentiment-analysis` da
+`transformers`, com o modelo padrão
+`distilbert-base-uncased-finetuned-sst-2-english`, classifica cada
+resumo como `POSITIVE` ou `NEGATIVE` com um score de confiança. O
+modelo foi treinado em resenhas de filme (SST-2), não em texto técnico
+de engenharia — é uma primeira aproximação concreta do tom, no mesmo
+espírito pragmático da etapa 1 ao usar Jaccard em vez de uma métrica
+mais sofisticada.
+
+**Duas análises** (`nlp/semantic.py`), espelhando as da etapa 1:
+
+1. **Matriz de convergência semântica** — similaridade de cosseno entre
+   o vetor médio (centróide) dos embeddings de cada empresa. Versão
+   semântica da matriz de Jaccard: compare as duas e veja se as
+   empresas parecem mais parecidas quando medidas por significado.
+2. **Sentimento médio por empresa e ano** — tabela de -1 (só negativo)
+   a +1 (só positivo), por empresa e ano. Complementa a "evolução de
+   termos quentes" da etapa 1: aquela mostra *sobre o que* se fala,
+   esta mostra *com que tom*.
+
+Os resultados ficam salvos em 2 tabelas novas no mesmo `data/posts.json`
+(`semantic_convergencia`, `sentimento_por_empresa_ano`) e também são
+impressos no terminal ao rodar. Os embeddings em si não são salvos no
+banco (ficariam pesados e não servem pra consulta direta) — só os
+resultados já agregados.
+
+**Compatibilidade com a etapa 1**: nenhum arquivo da etapa 1 foi
+alterado. `blogs-engenharia-scrape`, `blogs-engenharia-analyze` e
+`blogs-engenharia-stats` continuam funcionando exatamente como antes, e
+as tabelas da etapa 2 não sobrescrevem as da etapa 1 — dá pra rodar as
+duas análises lado a lado sobre o mesmo `data/posts.json`.
 
 ## Estrutura de cada documento salvo no TinyDB
 
@@ -246,12 +317,17 @@ ficam um nível acima, fora do pacote (ver `../docs/`, `../examples/`).
 │       │       ├── spotify.py                   # Selenium (load more) + BeautifulSoup
 │       │       └── uber.py                       # Selenium (paginação) + BeautifulSoup
 │       ├── nlp/
-│       │   ├── preprocess.py            # limpeza + extração de siglas via RE
-│       │   ├── pipeline.py                # tagging/lematização/NER via spaCy
-│       │   └── aggregate.py                 # agregação por empresa/ano, Jaccard, termos quentes
+│       │   ├── preprocess.py            # etapa 1: limpeza + extração de siglas via RE
+│       │   ├── pipeline.py                # etapa 1: tagging/lematização/NER via spaCy
+│       │   ├── aggregate.py                 # etapa 1: agregação por empresa/ano, Jaccard, termos quentes
+│       │   ├── resumo.py                      # etapa 2: resumo via spaCy (sentencizer)
+│       │   ├── embeddings.py                    # etapa 2: vetores via sentence-transformers
+│       │   ├── sentiment.py                       # etapa 2: classificação de tom via transformers
+│       │   └── semantic.py                          # etapa 2: centróide, cosseno, agregação
 │       └── cli/
 │           ├── scrape.py          # orquestrador da coleta (blogs-engenharia-scrape)
-│           ├── analyze.py          # orquestrador da análise de PLN (blogs-engenharia-analyze)
+│           ├── analyze.py          # etapa 1: RE + spaCy (blogs-engenharia-analyze)
+│           ├── semantic.py          # etapa 2: embeddings + sentimento (blogs-engenharia-semantic)
 │           └── stats.py             # conferência rápida pós-coleta (blogs-engenharia-stats)
 ├── tests/                   # testes unitários (pytest), sem rede real
 └── data/posts.json          # banco TinyDB (posts + resultados de PLN) — gerado, não versionado
@@ -259,8 +335,11 @@ ficam um nível acima, fora do pacote (ver `../docs/`, `../examples/`).
 
 ## Próximos passos (fora do escopo desta entrega)
 
-A versão mais ambiciosa da pergunta de pesquisa do tema — representar a
-convergência/divergência como uma **rede ou série temporal de
-similaridade vetorial via embeddings** (ex.: `sentence-transformers`,
-em vez da contagem de termos/Jaccard usada aqui) — fica para uma etapa
-futura do trabalho.
+A etapa 2 já cobriu a ideia de representar convergência/divergência via
+similaridade vetorial de embeddings, cogitada no fim da etapa 1. Uma
+versão ainda mais completa — fora do escopo até aqui — seria uma
+**série temporal da similaridade semântica** (não só uma matriz única
+pro período inteiro, mas uma por ano, pra ver a convergência semântica
+evoluindo), e um modelo de sentimento especializado em texto técnico de
+engenharia em vez do modelo genérico (treinado em resenhas de filme)
+usado na etapa 2.
