@@ -1,9 +1,12 @@
-"""Classes falsas (fakes nomeados) que simulam I/O externo (HTTP) nos
-testes, sem rede real — ver regra de testes em CLAUDE.md ("mock external
-I/O... with named fake classes, not inline stubs").
+"""Classes falsas (fakes nomeados) que simulam I/O externo (HTTP, modelos
+transformer) nos testes, sem rede nem download real — ver regra de
+testes em CLAUDE.md ("mock external I/O... with named fake classes, not
+inline stubs").
 """
 
 from __future__ import annotations
+
+import numpy as np
 
 
 class FakeWordPressResponse:
@@ -42,3 +45,38 @@ class FakeWordPressSession:
         if indice >= len(self.paginas):
             return FakeWordPressResponse([])
         return FakeWordPressResponse(self.paginas[indice])
+
+
+class FakeEmbeddingModel:
+    """Imita a interface `.encode()` do `SentenceTransformer` (etapa 2),
+    sem baixar nem rodar nenhum modelo real.
+
+    O vetor de cada texto é determinístico (conta vogais/consoantes),
+    só pra exercitar a aritmética de `gerar_embeddings` — textos iguais
+    sempre viram o mesmo vetor, o suficiente pra testar similaridade.
+    """
+
+    def encode(self, textos: list[str], **kwargs) -> np.ndarray:
+        return np.array([self._vetor(t) for t in textos], dtype=float)
+
+    @staticmethod
+    def _vetor(texto: str) -> list[float]:
+        texto = texto.lower()
+        vogais = sum(texto.count(v) for v in "aeiou")
+        consoantes = sum(c.isalpha() for c in texto) - vogais
+        return [float(vogais), float(consoantes)]
+
+
+class FakeSentimentClassifier:
+    """Imita o pipeline `sentiment-analysis` da transformers (etapa 2),
+    sem baixar nem rodar nenhum modelo real.
+
+    Classifica como "POSITIVE" se o texto contém a palavra "great",
+    senão "NEGATIVE" — o suficiente pra testar que
+    `classificar_sentimento` repassa rótulo e score corretamente.
+    """
+
+    def __call__(self, texto: str) -> list[dict]:
+        if "great" in texto.lower():
+            return [{"label": "POSITIVE", "score": 0.95}]
+        return [{"label": "NEGATIVE", "score": 0.80}]
