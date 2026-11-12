@@ -17,11 +17,18 @@ dependencies = [
     "tinydb>=4.8",
     "feedparser>=6.0",
     "spacy>=3.8",
+    "sentence-transformers>=3.0",
+    "transformers>=4.40",
 ]
 
 # Depois de instalar, baixe o modelo de inglês do spaCy (comando separado,
 # não é um pacote pip comum):
 #   python -m spacy download en_core_web_sm
+#
+# sentence-transformers e transformers baixam os próprios modelos
+# (all-MiniLM-L6-v2, ~90MB; distilbert-sst2, ~260MB) automaticamente na
+# primeira execução de `blogs-engenharia-semantic` — não precisa de
+# comando separado, mas precisa de internet na primeira vez.
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
@@ -30,6 +37,7 @@ dev = ["pytest>=8.0"]
 blogs-engenharia-scrape = "blogs_engenharia.cli.scrape:main"
 blogs-engenharia-analyze = "blogs_engenharia.cli.analyze:main"
 blogs-engenharia-stats = "blogs_engenharia.cli.stats:main"
+blogs-engenharia-semantic = "blogs_engenharia.cli.semantic:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/blogs_engenharia"]
