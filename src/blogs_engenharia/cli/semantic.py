@@ -20,37 +20,56 @@ sobre cada post.
 import argparse
 import time
 
-from blogs_engenharia.nlp.embeddings import carregar_modelo_embeddings, gerar_embeddings
+from blogs_engenharia.nlp.embeddings import carregar_modelo_embeddings, gerar_embeddings_por_post
+from blogs_engenharia.nlp.pedacos import dividir_em_pedacos
 from blogs_engenharia.nlp.resumo import carregar_segmentador_de_frases, extrair_resumo
 from blogs_engenharia.nlp.semantic import (
     centroide_por_empresa,
     matriz_convergencia_semantica,
     sentimento_medio_por_empresa_ano,
 )
-from blogs_engenharia.nlp.sentiment import carregar_classificador_sentimento, classificar_sentimento
+from blogs_engenharia.nlp.sentiment import (
+    carregar_classificador_sentimento,
+    pontuar_sentimento_em_lote,
+    rotulo_do_score,
+)
 from blogs_engenharia.scraper.database import get_db
 
 
-def processar_posts(posts, segmentador, modelo_embeddings, classificador) -> list[dict]:
-    """Resume, embeda e classifica o sentimento de cada post.
+def preparar_textos(posts: list[dict], segmentador) -> tuple[list[list[str]], list[str]]:
+    """Os textos que cada modelo recebe: pedaços do post inteiro e o resumo.
+
+    Cada modelo usa a entrada que mediu melhor na comparação das duas
+    estratégias (ver README, "Resumo vs. post inteiro"): embeddings leem
+    o post inteiro em pedaços; o sentimento lê só as 3 primeiras frases,
+    porque os trechos técnicos do meio do post confundem o modelo
+    treinado em resenhas de filme.
+    """
+    pedacos = [dividir_em_pedacos(segmentador, p["conteudo"]) for p in posts]
+    resumos = [extrair_resumo(segmentador, p["conteudo"]) for p in posts]
+    return pedacos, resumos
+
+
+def processar_posts(posts, pedacos_por_post, resumos, modelo_embeddings, classificador) -> list[dict]:
+    """Embeda (pelos pedaços) e classifica o sentimento (pelo resumo) de cada post.
 
     Devolve um registro por post com os campos originais (empresa, url,
     ano) mais o embedding e o sentimento — a entrada das agregações em
     `nlp/semantic.py`.
     """
-    resumos = [extrair_resumo(segmentador, p["conteudo"]) for p in posts]
-    embeddings = gerar_embeddings(modelo_embeddings, resumos)
+    embeddings = gerar_embeddings_por_post(modelo_embeddings, pedacos_por_post)
+    scores = pontuar_sentimento_em_lote(classificador, resumos)
 
     registros = []
-    for post, resumo, embedding in zip(posts, resumos, embeddings):
-        label, score = classificar_sentimento(classificador, resumo)
+    for post, embedding, score in zip(posts, embeddings, scores):
+        label, confianca = rotulo_do_score(score)
         registros.append({
             "empresa": post["empresa"],
             "url": post["url"],
             "ano": post["data_publicacao"][:4],
             "embedding": embedding,
             "sentimento_label": label,
-            "sentimento_score": score,
+            "sentimento_score": confianca,
         })
     return registros
 
@@ -120,12 +139,13 @@ def main():
         print("Nenhum post encontrado. Rode 'blogs-engenharia-scrape' primeiro.")
         return
 
-    print(f"Carregando modelos de embeddings e sentimento e processando {len(posts)} posts...")
+    print(f"Carregando modelos e processando {len(posts)} posts...")
     t0 = time.time()
-    segmentador = carregar_segmentador_de_frases()
-    modelo_embeddings = carregar_modelo_embeddings()
-    classificador = carregar_classificador_sentimento()
-    registros = processar_posts(posts, segmentador, modelo_embeddings, classificador)
+    pedacos_por_post, resumos = preparar_textos(posts, carregar_segmentador_de_frases())
+    print(f"{sum(map(len, pedacos_por_post))} pedaços de texto para os embeddings.")
+    registros = processar_posts(
+        posts, pedacos_por_post, resumos, carregar_modelo_embeddings(), carregar_classificador_sentimento()
+    )
     print(f"Processamento concluído em {time.time() - t0:.1f}s.")
 
     centroides = centroide_por_empresa(registros)
