@@ -67,21 +67,28 @@ class FakeEmbeddingModel:
         return [float(vogais), float(consoantes)]
 
 
-class FakeSentimentClassifier:
-    """Imita o pipeline `sentiment-analysis` da transformers (etapa 2),
+class FakeZeroShotClassifier:
+    """Imita o pipeline `zero-shot-classification` da transformers (etapa 2),
     sem baixar nem rodar nenhum modelo real.
 
-    Classifica como "POSITIVE" se o texto contém a palavra "great",
-    senão "NEGATIVE" — o suficiente pra testar que
-    `pontuar_sentimento_em_lote` repassa rótulo e score corretamente.
-    Recebe uma lista de textos, como o pipeline real em modo lote.
+    Dá 0.8 ao primeiro rótulo candidato se o texto contém "great", ao
+    último se contém "outage", e ao do meio nos outros casos (o resto é
+    dividido igualmente). Com `sentiment.py::ROTULOS` na ordem
+    conquista/neutro/problema, isso vira POSITIVO/NEGATIVO/NEUTRO.
+    Devolve rótulos em ordem decrescente de score, como o pipeline real.
+    Guarda o que recebeu em `textos_recebidos` para os testes conferirem.
     """
 
-    def __call__(self, textos: list[str], **kwargs) -> list[dict]:
-        return [self._classificar(t) for t in textos]
+    def __init__(self):
+        self.textos_recebidos: list[str] = []
+
+    def __call__(self, textos: list[str], candidate_labels: list[str], **kwargs) -> list[dict]:
+        self.textos_recebidos.extend(textos)
+        return [self._classificar(t, candidate_labels) for t in textos]
 
     @staticmethod
-    def _classificar(texto: str) -> dict:
-        if "great" in texto.lower():
-            return {"label": "POSITIVE", "score": 0.95}
-        return {"label": "NEGATIVE", "score": 0.80}
+    def _classificar(texto: str, rotulos: list[str]) -> dict:
+        escolhido = rotulos[0] if "great" in texto.lower() else rotulos[-1] if "outage" in texto.lower() else rotulos[1]
+        scores = {r: (0.8 if r == escolhido else 0.1) for r in rotulos}
+        ordem = sorted(rotulos, key=scores.get, reverse=True)
+        return {"labels": ordem, "scores": [scores[r] for r in ordem]}

@@ -56,13 +56,30 @@ def matriz_convergencia_semantica(centroides: dict[str, np.ndarray]) -> dict[tup
 def sentimento_medio_por_empresa_ano(registros: list[dict]) -> dict[tuple[str, str], float]:
     """Score médio de sentimento (-1 a 1) por empresa e ano.
 
-    Cada post entra como +score se "POSITIVE", -score se "NEGATIVE" — a
-    média por empresa/ano mostra se o tom predominante é positivo ou
-    negativo naquele período. Complementa `evolucao_termos` da etapa 1,
-    que mostra SOBRE O QUE se fala, não COM QUE TOM.
+    `sentimento_score` de cada post já vem com sinal (P(POSITIVO) −
+    P(NEGATIVO), ver `sentiment.py::tom_do_post`) — a média por
+    empresa/ano mostra para que lado o tom pende naquele período.
+    Complementa `evolucao_termos` da etapa 1, que mostra SOBRE O QUE se
+    fala, não COM QUE TOM.
     """
     por_empresa_ano = defaultdict(list)
     for r in registros:
-        sinal = 1.0 if r["sentimento_label"] == "POSITIVE" else -1.0
-        por_empresa_ano[(r["empresa"], r["ano"])].append(sinal * r["sentimento_score"])
+        por_empresa_ano[(r["empresa"], r["ano"])].append(r["sentimento_score"])
     return {chave: sum(v) / len(v) for chave, v in por_empresa_ano.items()}
+
+
+def distribuicao_tom_por_empresa(registros: list[dict]) -> dict[str, dict[str, float]]:
+    """Fração dos posts de cada empresa em cada tom (POSITIVO/NEUTRO/NEGATIVO).
+
+    A média de `sentimento_medio_por_empresa_ano` esconde quantos posts
+    são neutros; esta tabela mostra a proporção de cada tom.
+    Exemplo:
+        distribuicao_tom_por_empresa(registros)["Meta"]  # -> {"POSITIVO": 0.5, "NEUTRO": 0.4, "NEGATIVO": 0.1}
+    """
+    tons_por_empresa = defaultdict(list)
+    for r in registros:
+        tons_por_empresa[r["empresa"]].append(r["sentimento_label"])
+    return {
+        empresa: {tom: tons.count(tom) / len(tons) for tom in ("POSITIVO", "NEUTRO", "NEGATIVO")}
+        for empresa, tons in tons_por_empresa.items()
+    }

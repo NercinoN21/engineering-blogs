@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Etapa 2 (PLN semântico): embeddings + sentimento sobre os posts já
+"""Etapa 2 (PLN semântico): embeddings + tom sobre os posts já
 coletados (`blogs-engenharia-scrape`), comparando convergência por
 SIGNIFICADO — não só por palavra exata, como a Jaccard da etapa 1 — e
-o tom das discussões (positivo/negativo).
+o tom das discussões (conquista, explicação neutra ou problema).
 
 Uso:
     blogs-engenharia-semantic              # roda tudo e mostra o resumo
@@ -12,70 +12,57 @@ Uso:
     python -m blogs_engenharia.cli.semantic
 
 Pré-requisito: já ter rodado o scraper (precisa de posts em
-data/posts.json). Mais lento que a etapa 1: carrega dois modelos
-transformer (~90MB + ~260MB, baixados na 1ª execução) e roda os dois
-sobre cada post.
+data/posts.json). Bem mais lento que a etapa 1: carrega dois modelos
+transformer (~90MB + ~740MB, baixados na 1ª execução) e roda os dois
+sobre cada pedaço de cada post — ~1h30 para os 1.157 posts numa GPU de
+Mac (MPS); use --limite para testar.
 """
 
 import argparse
 import time
 
 from blogs_engenharia.nlp.embeddings import carregar_modelo_embeddings, gerar_embeddings_por_post
-from blogs_engenharia.nlp.pedacos import dividir_em_pedacos
-from blogs_engenharia.nlp.resumo import carregar_segmentador_de_frases, extrair_resumo
+from blogs_engenharia.nlp.pedacos import achatar, carregar_segmentador_de_frases, dividir_em_pedacos, reagrupar
 from blogs_engenharia.nlp.semantic import (
     centroide_por_empresa,
+    distribuicao_tom_por_empresa,
     matriz_convergencia_semantica,
     sentimento_medio_por_empresa_ano,
 )
-from blogs_engenharia.nlp.sentiment import (
-    carregar_classificador_sentimento,
-    pontuar_sentimento_em_lote,
-    rotulo_do_score,
-)
+from blogs_engenharia.nlp.sentiment import carregar_classificador_sentimento, probabilidades_em_lote, tom_do_post
 from blogs_engenharia.scraper.database import get_db
 
-
-def preparar_textos(posts: list[dict], segmentador) -> tuple[list[list[str]], list[str]]:
-    """Os textos que cada modelo recebe: pedaços do post inteiro e o resumo.
-
-    Cada modelo usa a entrada que mediu melhor na comparação das duas
-    estratégias (ver README, "Resumo vs. post inteiro"): embeddings leem
-    o post inteiro em pedaços; o sentimento lê só as 3 primeiras frases,
-    porque os trechos técnicos do meio do post confundem o modelo
-    treinado em resenhas de filme.
-    """
-    pedacos = [dividir_em_pedacos(segmentador, p["conteudo"]) for p in posts]
-    resumos = [extrair_resumo(segmentador, p["conteudo"]) for p in posts]
-    return pedacos, resumos
+TONS = ("POSITIVO", "NEUTRO", "NEGATIVO")
 
 
-def processar_posts(posts, pedacos_por_post, resumos, modelo_embeddings, classificador) -> list[dict]:
-    """Embeda (pelos pedaços) e classifica o sentimento (pelo resumo) de cada post.
+def processar_posts(posts, pedacos_por_post, modelo_embeddings, classificador) -> list[dict]:
+    """Embeda e classifica o tom de cada post a partir dos seus pedaços.
 
-    Devolve um registro por post com os campos originais (empresa, url,
-    ano) mais o embedding e o sentimento — a entrada das agregações em
-    `nlp/semantic.py`.
+    Os dois modelos leem o post inteiro em pedaços (ver
+    `nlp/pedacos.py`) e o post é a média dos pedaços. Devolve um
+    registro por post com os campos originais (empresa, url, ano) mais o
+    embedding e o tom — a entrada das agregações em `nlp/semantic.py`.
     """
     embeddings = gerar_embeddings_por_post(modelo_embeddings, pedacos_por_post)
-    scores = pontuar_sentimento_em_lote(classificador, resumos)
+    textos, tamanhos = achatar(pedacos_por_post)
+    probabilidades_por_post = reagrupar(probabilidades_em_lote(classificador, textos), tamanhos)
 
     registros = []
-    for post, embedding, score in zip(posts, embeddings, scores):
-        label, confianca = rotulo_do_score(score)
+    for post, embedding, probabilidades in zip(posts, embeddings, probabilidades_por_post):
+        tom, score = tom_do_post(probabilidades)
         registros.append({
             "empresa": post["empresa"],
             "url": post["url"],
             "ano": post["data_publicacao"][:4],
             "embedding": embedding,
-            "sentimento_label": label,
-            "sentimento_score": confianca,
+            "sentimento_label": tom,
+            "sentimento_score": score,
         })
     return registros
 
 
-def salvar_resultados(db, matriz, sentimentos) -> None:
-    """Salva a matriz de convergência semântica e o sentimento médio.
+def salvar_resultados(db, matriz, sentimentos, tons) -> None:
+    """Salva a matriz semântica, o sentimento médio e a distribuição de tons.
 
     Não salvamos os embeddings em si (ficariam pesados no TinyDB e não
     servem pra consulta direta) — só os resultados já agregados, mesmo
@@ -93,6 +80,12 @@ def salvar_resultados(db, matriz, sentimentos) -> None:
         for (empresa, ano), score in sentimentos.items()
     )
 
+    db.table("tom_por_empresa").truncate()
+    db.table("tom_por_empresa").insert_multiple(
+        {"empresa": empresa, **{tom.lower(): round(fracao, 4) for tom, fracao in fracoes.items()}}
+        for empresa, fracoes in tons.items()
+    )
+
 
 def _imprimir_matriz_semantica(matriz: dict) -> None:
     print(f"\n{'=' * 80}\nMATRIZ DE CONVERGÊNCIA SEMÂNTICA (cosseno dos embeddings, 0=nada em comum, 1=idênticos)\n{'=' * 80}")
@@ -108,7 +101,7 @@ def _imprimir_matriz_semantica(matriz: dict) -> None:
 
 
 def _imprimir_sentimento(sentimentos: dict) -> None:
-    print(f"\n{'=' * 80}\nSENTIMENTO MÉDIO POR EMPRESA E ANO (-1 = só negativo, +1 = só positivo)\n{'=' * 80}")
+    print(f"\n{'=' * 80}\nSENTIMENTO MÉDIO POR EMPRESA E ANO (-1 = só problema, +1 = só conquista)\n{'=' * 80}")
     empresas = sorted({empresa for empresa, _ in sentimentos})
     anos = sorted({ano for _, ano in sentimentos})
     header = "Empresa".ljust(10) + "".join(ano.rjust(8) for ano in anos)
@@ -121,9 +114,17 @@ def _imprimir_sentimento(sentimentos: dict) -> None:
         print(linha)
 
 
-def imprimir_resumo(matriz: dict, sentimentos: dict) -> None:
+def _imprimir_tons(tons: dict) -> None:
+    print(f"\n{'=' * 80}\nTOM DOS POSTS POR EMPRESA (% de posts)\n{'=' * 80}")
+    print("Empresa".ljust(10) + "".join(tom.rjust(10) for tom in TONS))
+    for empresa in sorted(tons):
+        print(empresa.ljust(10) + "".join(f"{100 * tons[empresa][tom]:.0f}%".rjust(10) for tom in TONS))
+
+
+def imprimir_resumo(matriz: dict, sentimentos: dict, tons: dict) -> None:
     _imprimir_matriz_semantica(matriz)
     _imprimir_sentimento(sentimentos)
+    _imprimir_tons(tons)
 
 
 def main():
@@ -141,22 +142,24 @@ def main():
 
     print(f"Carregando modelos e processando {len(posts)} posts...")
     t0 = time.time()
-    pedacos_por_post, resumos = preparar_textos(posts, carregar_segmentador_de_frases())
-    print(f"{sum(map(len, pedacos_por_post))} pedaços de texto para os embeddings.")
+    segmentador = carregar_segmentador_de_frases()
+    pedacos_por_post = [dividir_em_pedacos(segmentador, p["conteudo"]) for p in posts]
+    print(f"{sum(map(len, pedacos_por_post))} pedaços de texto para os modelos.")
     registros = processar_posts(
-        posts, pedacos_por_post, resumos, carregar_modelo_embeddings(), carregar_classificador_sentimento()
+        posts, pedacos_por_post, carregar_modelo_embeddings(), carregar_classificador_sentimento()
     )
     print(f"Processamento concluído em {time.time() - t0:.1f}s.")
 
     centroides = centroide_por_empresa(registros)
     matriz = matriz_convergencia_semantica(centroides)
     sentimentos = sentimento_medio_por_empresa_ano(registros)
+    tons = distribuicao_tom_por_empresa(registros)
 
-    salvar_resultados(db, matriz, sentimentos)
-    imprimir_resumo(matriz, sentimentos)
+    salvar_resultados(db, matriz, sentimentos, tons)
+    imprimir_resumo(matriz, sentimentos, tons)
 
     print(f"\nResultados salvos em data/posts.json, tabelas: "
-          f"semantic_convergencia, sentimento_por_empresa_ano.")
+          f"semantic_convergencia, sentimento_por_empresa_ano, tom_por_empresa.")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
-"""Divide o post inteiro em pedaços que cabem no modelo de embeddings (etapa 2).
+"""Divide o post inteiro em pedaços que cabem nos modelos (etapa 2).
 
-Substitui o resumo das 3 primeiras frases (`nlp/resumo.py`) como
-entrada dos embeddings: em vez de olhar só a introdução, cada post é
-lido por inteiro, em pedaços de frases consecutivas. Cada pedaço vira
-um embedding e o post é a média deles (ver
-`embeddings.py::gerar_embeddings_por_post`). Na comparação, o vetor do
-post passou a achar o próprio título entre os 1.157 em 68% dos casos,
-contra 58% com o resumo (ver README, "Resumo vs. post inteiro").
+Substitui o resumo das 3 primeiras frases (removido em favor desta
+abordagem) como entrada dos dois modelos: em vez de olhar só a
+introdução, cada post é lido por inteiro, em pedaços de frases
+consecutivas, e o post é a média dos pedaços (ver
+`embeddings.py::gerar_embeddings_por_post` e `sentiment.py::tom_do_post`).
+Na comparação, o vetor do post passou a achar o próprio título entre os
+1.157 em 68% dos casos, contra 58% com o resumo; no sentimento, o acerto
+no gabarito subiu de 61% para 72% (ver README, "Resumo vs. post inteiro").
 
 O MiniLM lê no máximo 256 tokens e ignora o resto sem avisar. Texto
 técnico em inglês dá ~1,3 token por palavra, então 150 palavras ficam
@@ -14,7 +15,24 @@ abaixo desse limite: medido com o tokenizador do modelo, a mediana é
 180 tokens e só 3,5% dos pedaços passam de 256 (trechos de código).
 """
 
+import spacy
+
 MAX_PALAVRAS_POR_PEDACO = 150
+
+
+def carregar_segmentador_de_frases():
+    """Pipeline spaCy só com separação de frases (sem modelo estatístico).
+
+    `spacy.blank` com só o `sentencizer` (regras de pontuação) — diferente
+    do `en_core_web_sm` da etapa 1, com tagger/lematizador/NER: aqui só
+    precisamos separar frases, e carregar o modelo estatístico inteiro só
+    pra isso seria ordens de magnitude mais lento.
+    Exemplo:
+        dividir_em_pedacos(carregar_segmentador_de_frases(), texto)
+    """
+    nlp = spacy.blank("en")
+    nlp.add_pipe("sentencizer")
+    return nlp
 
 
 def dividir_em_pedacos(segmentador, texto: str, max_palavras: int = MAX_PALAVRAS_POR_PEDACO) -> list[str]:

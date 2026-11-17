@@ -1,56 +1,89 @@
-"""Classificação de sentimento dos posts (etapa 2): estima se o tom de
-cada post é positivo ou negativo — um sinal que a contagem de palavras
-da etapa 1 não captura (saber QUE palavras aparecem não diz COM QUE TOM
-elas são usadas).
+"""Classificação do tom dos posts (etapa 2): conquista, explicação neutra
+ou problema — um sinal que a contagem de palavras da etapa 1 não captura
+(saber QUE palavras aparecem não diz COM QUE TOM elas são usadas).
 
-Modelo: `distilbert-base-uncased-finetuned-sst-2-english` — o modelo
-padrão do pipeline `sentiment-analysis` da biblioteca transformers,
-treinado em resenhas de filme (SST-2). Não é especializado em texto
-técnico de engenharia, mas serve como primeira aproximação concreta do
-tom — a mesma postura da etapa 1 ao usar Jaccard em vez de uma métrica
-mais sofisticada.
+Modelo: `MoritzLaurer/deberta-v3-base-zeroshot-v2.0`, classificação
+*zero-shot*: o modelo não foi treinado com estes rótulos; ele julga se o
+texto confirma cada frase de `ROTULOS` (inferência textual, NLI). Isso
+permite um rótulo NEUTRO, que faz falta em texto técnico.
+
+Substitui o `distilbert-base-uncased-finetuned-sst-2-english` (modelo
+padrão do pipeline `sentiment-analysis`, treinado em resenhas de filme).
+Num gabarito de 79 posts rotulados à mão, o SST-2 acertou 29% — sem
+classe neutra, errava todos os posts neutros, que são 59% da amostra; o
+zero-shot lendo o post inteiro em pedaços acertou 72% (ver README,
+"Modelo de sentimento").
 """
 
-MODELO_SENTIMENTO = "distilbert-base-uncased-finetuned-sst-2-english"
-LIMITE_CARACTERES = 2_000  # ~512 tokens, o máximo que o modelo aceita de uma vez
-TAMANHO_LOTE = 32
+import numpy as np
+
+MODELO_SENTIMENTO = "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+HIPOTESE = "This text {}."
+ROTULOS = {
+    "describes an achievement or improvement": "POSITIVO",
+    "neutrally explains a technical topic": "NEUTRO",
+    "describes a problem, failure or incident": "NEGATIVO",
+}
+LIMITE_CARACTERES = 2_000  # folga: um pedaço de 150 palavras tem ~1.000 caracteres
+TAMANHO_LOTE = 16
 
 
 def carregar_classificador_sentimento():
-    """Carrega o pipeline de sentiment-analysis (baixado na 1ª execução).
+    """Carrega o pipeline de zero-shot-classification (baixado na 1ª execução).
 
     Import adiado pra dentro da função — ver motivo em
     `nlp/embeddings.py::carregar_modelo_embeddings`.
     """
     from transformers import pipeline
 
-    return pipeline("sentiment-analysis", model=MODELO_SENTIMENTO, truncation=True)
+    return pipeline("zero-shot-classification", model=MODELO_SENTIMENTO, device=escolher_dispositivo())
 
 
-def pontuar_sentimento_em_lote(classificador, textos: list[str]) -> list[float]:
-    """Score com sinal de cada texto: +confiança se POSITIVE, −confiança se NEGATIVE.
+def escolher_dispositivo() -> str:
+    """GPU quando houver: no Mac (MPS), o DeBERTa roda ~9x mais rápido que na CPU.
+
+    Exemplo:
+        escolher_dispositivo()  # -> "mps", "cuda" ou "cpu"
+    """
+    import torch
+
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def probabilidades_em_lote(classificador, textos: list[str]) -> list[dict[str, float]]:
+    """Probabilidade de cada tom (POSITIVO/NEUTRO/NEGATIVO) para cada texto.
 
     `classificador` é injetável em vez de criado aqui dentro (mesma
     razão de `embeddings.py::gerar_embeddings`): nos testes, um fake
-    sem modelo real (ver `tests/fakes.py::FakeSentimentClassifier`).
-    Trunca em `LIMITE_CARACTERES` antes de mandar pro modelo porque o
-    pipeline do Hugging Face corta em tokens, não em caracteres — cortar
-    antes evita mandar texto gigante e deixar o tokenizer truncar menos
-    previsivelmente. Uma chamada só, em lote, é bem mais rápida que uma
-    chamada por texto.
+    sem modelo real (ver `tests/fakes.py::FakeZeroShotClassifier`).
+    Uma chamada só, em lote, é bem mais rápida que uma chamada por texto.
     Exemplo:
-        pontuar_sentimento_em_lote(classificador, ["Great!", "Outage."])  # -> [0.99, -0.97]
+        probabilidades_em_lote(clf, ["We cut costs by 94%."])
+        # -> [{"POSITIVO": 0.9, "NEUTRO": 0.08, "NEGATIVO": 0.02}]
     """
-    resultados = classificador([t[:LIMITE_CARACTERES] for t in textos], batch_size=TAMANHO_LOTE)
-    return [r["score"] if r["label"] == "POSITIVE" else -r["score"] for r in resultados]
+    saidas = classificador(
+        [t[:LIMITE_CARACTERES] for t in textos],
+        candidate_labels=list(ROTULOS),
+        hypothesis_template=HIPOTESE,
+        batch_size=TAMANHO_LOTE,
+    )
+    return [{ROTULOS[r]: s for r, s in zip(saida["labels"], saida["scores"])} for saida in saidas]
 
 
-def rotulo_do_score(score: float) -> tuple[str, float]:
-    """Converte um score com sinal de volta em (rótulo, confiança).
+def tom_do_post(probabilidades_dos_pedacos: list[dict[str, float]]) -> tuple[str, float]:
+    """Combina os pedaços de um post em (tom predominante, score de −1 a +1).
 
-    Mantém o formato que `semantic.py::sentimento_medio_por_empresa_ano`
-    espera, o mesmo que o pipeline devolve para um texto.
+    Tira a média das probabilidades dos pedaços: o tom é a classe com
+    maior média, e o score é P(POSITIVO) − P(NEGATIVO) — pedaços neutros
+    puxam o score para perto de zero em vez de forçar um lado.
     Exemplo:
-        rotulo_do_score(-0.97)  # -> ("NEGATIVE", 0.97)
+        tom_do_post([{"POSITIVO": 0.8, "NEUTRO": 0.1, "NEGATIVO": 0.1}])  # -> ("POSITIVO", 0.7)
     """
-    return ("POSITIVE" if score >= 0 else "NEGATIVE"), abs(score)
+    if not probabilidades_dos_pedacos:
+        raise ValueError(f"post sem pedaços: esperava ao menos 1 dict de probabilidades, recebi {probabilidades_dos_pedacos!r}")
+    media = {tom: float(np.mean([p[tom] for p in probabilidades_dos_pedacos])) for tom in ROTULOS.values()}
+    return max(media, key=media.get), media["POSITIVO"] - media["NEGATIVO"]

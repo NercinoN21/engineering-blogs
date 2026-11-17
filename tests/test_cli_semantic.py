@@ -1,37 +1,32 @@
 import pytest
 
-from blogs_engenharia.cli.semantic import preparar_textos, processar_posts
-from blogs_engenharia.nlp.resumo import carregar_segmentador_de_frases
+from blogs_engenharia.cli.semantic import processar_posts
 
-from .fakes import FakeEmbeddingModel, FakeSentimentClassifier
+from .fakes import FakeEmbeddingModel, FakeZeroShotClassifier
 
 POST = {
     "empresa": "Slack",
     "url": "https://slack.engineering/x",
     "data_publicacao": "2024-05-01",
-    "conteudo": "Intro sentence. Second one. Third one. This great ending is the fourth.",
+    "conteudo": "irrelevante: os pedaços são passados prontos",
 }
 
 
-def test_preparar_textos_pedacos_leem_o_post_inteiro():
-    pedacos, _ = preparar_textos([POST], carregar_segmentador_de_frases())
+def test_processar_posts_combina_o_tom_dos_pedacos():
+    pedacos_por_post = [["A great launch.", "The outage was bad.", "We use Kafka."]]
 
-    assert "fourth" in " ".join(pedacos[0])
+    [registro] = processar_posts([POST], pedacos_por_post, FakeEmbeddingModel(), FakeZeroShotClassifier())
 
-
-def test_preparar_textos_resumo_usa_so_as_tres_primeiras_frases():
-    _, resumos = preparar_textos([POST], carregar_segmentador_de_frases())
-
-    assert resumos == ["Intro sentence. Second one. Third one."]
-
-
-def test_processar_posts_sentimento_vem_do_resumo_nao_dos_pedacos():
-    # "great" só aparece nos pedaços; o resumo não tem -> NEGATIVE.
-    pedacos, resumos = [["This is great."]], ["Outage report."]
-
-    [registro] = processar_posts([POST], pedacos, resumos, FakeEmbeddingModel(), FakeSentimentClassifier())
-
-    assert registro["sentimento_label"] == "NEGATIVE"
-    assert registro["sentimento_score"] == pytest.approx(0.80)
+    # cada tom ganha 0.8 em um pedaço: médias empatadas em 0.333,
+    # então o score P(POS) − P(NEG) fica em zero.
+    assert registro["sentimento_score"] == pytest.approx(0.0)
     assert registro["ano"] == "2024"
     assert registro["embedding"].shape == (2,)
+
+
+def test_processar_posts_um_registro_por_post():
+    posts = [POST, {**POST, "url": "https://slack.engineering/y"}]
+
+    registros = processar_posts(posts, [["Great."], ["Outage."]], FakeEmbeddingModel(), FakeZeroShotClassifier())
+
+    assert [r["sentimento_label"] for r in registros] == ["POSITIVO", "NEGATIVO"]

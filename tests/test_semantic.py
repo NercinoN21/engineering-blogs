@@ -3,6 +3,7 @@ import pytest
 
 from blogs_engenharia.nlp.semantic import (
     centroide_por_empresa,
+    distribuicao_tom_por_empresa,
     matriz_convergencia_semantica,
     sentimento_medio_por_empresa_ano,
     similaridade_cosseno,
@@ -41,12 +42,25 @@ def test_matriz_convergencia_semantica_calcula_pares():
     assert matriz[("A", "C")] == 0.0
 
 
-def test_sentimento_medio_por_empresa_ano_combina_sinal_e_score():
+def test_sentimento_medio_por_empresa_ano_tira_a_media_do_score_com_sinal():
     registros = [
-        {"empresa": "Meta", "ano": "2026", "sentimento_label": "POSITIVE", "sentimento_score": 0.8},
-        {"empresa": "Meta", "ano": "2026", "sentimento_label": "NEGATIVE", "sentimento_score": 0.4},
+        {"empresa": "Meta", "ano": "2026", "sentimento_label": "POSITIVO", "sentimento_score": 0.8},
+        {"empresa": "Meta", "ano": "2026", "sentimento_label": "NEGATIVO", "sentimento_score": -0.4},
     ]
 
     medias = sentimento_medio_por_empresa_ano(registros)
 
-    assert medias[("Meta", "2026")] == 0.2
+    assert medias[("Meta", "2026")] == pytest.approx(0.2)
+
+
+def test_distribuicao_tom_por_empresa_conta_fracao_de_cada_tom():
+    registros = [
+        {"empresa": "Uber", "sentimento_label": "POSITIVO"},
+        {"empresa": "Uber", "sentimento_label": "NEUTRO"},
+        {"empresa": "Uber", "sentimento_label": "NEUTRO"},
+        {"empresa": "Uber", "sentimento_label": "NEGATIVO"},
+    ]
+
+    tons = distribuicao_tom_por_empresa(registros)
+
+    assert tons["Uber"] == {"POSITIVO": 0.25, "NEUTRO": 0.5, "NEGATIVO": 0.25}

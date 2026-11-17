@@ -1,5 +1,4 @@
-from blogs_engenharia.nlp.pedacos import achatar, dividir_em_pedacos, reagrupar
-from blogs_engenharia.nlp.resumo import carregar_segmentador_de_frases
+from blogs_engenharia.nlp.pedacos import achatar, carregar_segmentador_de_frases, dividir_em_pedacos, reagrupar
 
 
 def test_dividir_em_pedacos_agrupa_frases_ate_o_limite():
