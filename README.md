@@ -161,7 +161,7 @@ interrompido e reexecutado sem problema.
 ```bash
 docker compose run --rm scrape     # coleta os 7 blogs
 docker compose run --rm analyze    # etapa 1: RE + spaCy (termos, Jaccard)
-docker compose run --rm semantic   # etapa 2: embeddings + sentimento
+docker compose run --rm semantic   # etapa 2: embeddings + tom (só CPU: ~12h; prefira rodar fora do Docker)
 docker compose run --rm stats      # resumo do que foi coletado
 ```
 
@@ -223,24 +223,24 @@ comparar posts por proximidade semântica, e acrescenta uma dimensão que
 a etapa 1 nem tentava medir — o **tom** (sentimento) das discussões.
 
 ```bash
-blogs-engenharia-semantic              # processa os 1157 posts (~3 minutos, + download dos modelos na 1ª vez)
-blogs-engenharia-semantic --limite 50  # só os 50 primeiros, pra testar rápido
+blogs-engenharia-semantic              # processa os 1157 posts (~1h30 numa GPU de Mac, + download dos modelos na 1ª vez)
+blogs-engenharia-semantic --limite 50  # só os 50 primeiros, pra testar rápido (~4 min)
 ```
 
-Mais lento que a etapa 1: baixa e roda dois modelos transformer (na
-primeira execução; depois ficam em cache). O `--limite` existe
-justamente pra isso — rodar o pipeline inteiro em poucos posts antes de
-soltar o processamento completo.
+Bem mais lento que a etapa 1: baixa e roda dois modelos transformer
+(na primeira execução; depois ficam em cache) sobre cada pedaço de cada
+post. O classificador de tom é o gargalo: roda na GPU quando houver
+(`sentiment.py::escolher_dispositivo`; no Mac, MPS é ~9x mais rápido que
+a CPU). O `--limite` existe justamente pra isso — rodar o pipeline
+inteiro em poucos posts antes de soltar o processamento completo.
 
-**Separação de frases** (`nlp/resumo.py`): um pipeline spaCy *em
+**Post inteiro em pedaços** (`nlp/pedacos.py`): um pipeline spaCy *em
 branco* — só com o componente `sentencizer`, sem o modelo estatístico
-da etapa 1 — separa as frases de cada post. Elas viram duas entradas
-diferentes, uma para cada modelo (ver "Resumo vs. post inteiro" abaixo):
-
-- **pedaços do post inteiro** (`nlp/pedacos.py`): frases consecutivas
-  agrupadas em pedaços de até 150 palavras, que cabem no limite de 256
-  tokens do MiniLM. Os 1.157 posts viram 17.040 pedaços;
-- **resumo**: as 3 primeiras frases do post.
+da etapa 1 — separa as frases de cada post, e frases consecutivas são
+agrupadas em pedaços de até 150 palavras, que cabem no limite de 256
+tokens do MiniLM. Os 1.157 posts viram 17.040 pedaços. Os dois modelos
+leem todos os pedaços, e o post é a média deles (ver "Resumo vs. post
+inteiro" abaixo).
 
 **Embeddings** (`nlp/embeddings.py`): `sentence-transformers` com o
 modelo `all-MiniLM-L6-v2` transforma cada pedaço num vetor de 384
@@ -248,29 +248,32 @@ dimensões; o vetor do post é a média dos seus pedaços. Dois posts com o
 mesmo *significado*, mesmo usando palavras diferentes, ficam com
 vetores próximos — algo que a Jaccard da etapa 1 não enxerga.
 
-**Sentimento** (`nlp/sentiment.py`): o pipeline `sentiment-analysis` da
-`transformers`, com o modelo padrão
-`distilbert-base-uncased-finetuned-sst-2-english`, classifica o
-resumo de cada post como `POSITIVE` ou `NEGATIVE` com um score de confiança. O
-modelo foi treinado em resenhas de filme (SST-2), não em texto técnico
-de engenharia — é uma primeira aproximação concreta do tom, no mesmo
-espírito pragmático da etapa 1 ao usar Jaccard em vez de uma métrica
-mais sofisticada.
+**Tom** (`nlp/sentiment.py`): classificação *zero-shot* com
+`MoritzLaurer/deberta-v3-base-zeroshot-v2.0`. O modelo não foi treinado
+com os nossos rótulos: ele julga se o pedaço confirma cada uma de três
+frases — "describes an achievement or improvement" (POSITIVO),
+"neutrally explains a technical topic" (NEUTRO) e "describes a problem,
+failure or incident" (NEGATIVO). O tom do post é a classe com maior
+probabilidade média entre os pedaços, e o score vai de −1 a +1
+(P(POSITIVO) − P(NEGATIVO)). Ver "Modelo de sentimento" abaixo para
+por que não um modelo de sentimento comum.
 
-**Duas análises** (`nlp/semantic.py`), espelhando as da etapa 1:
+**Três análises** (`nlp/semantic.py`), espelhando as da etapa 1:
 
 1. **Matriz de convergência semântica** — similaridade de cosseno entre
    o vetor médio (centróide) dos embeddings de cada empresa. Versão
    semântica da matriz de Jaccard: compare as duas e veja se as
    empresas parecem mais parecidas quando medidas por significado.
-2. **Sentimento médio por empresa e ano** — tabela de -1 (só negativo)
-   a +1 (só positivo), por empresa e ano. Complementa a "evolução de
+2. **Sentimento médio por empresa e ano** — tabela de −1 (só problema)
+   a +1 (só conquista), por empresa e ano. Complementa a "evolução de
    termos quentes" da etapa 1: aquela mostra *sobre o que* se fala,
    esta mostra *com que tom*.
+3. **Tom por empresa** — fração dos posts de cada empresa em cada tom
+   (a média do item 2 esconde quantos posts são neutros).
 
-Os resultados ficam salvos em 2 tabelas novas no mesmo `data/posts.json`
-(`semantic_convergencia`, `sentimento_por_empresa_ano`) e também são
-impressos no terminal ao rodar. Os embeddings em si não são salvos no
+Os resultados ficam salvos em 3 tabelas novas no mesmo `data/posts.json`
+(`semantic_convergencia`, `sentimento_por_empresa_ano`,
+`tom_por_empresa`) e também são impressos no terminal ao rodar. Os embeddings em si não são salvos no
 banco (ficariam pesados e não servem pra consulta direta) — só os
 resultados já agregados.
 
@@ -298,7 +301,44 @@ melhor, rodei as duas estratégias sobre os 1.157 posts e comparei:
   os trechos técnicos do meio do post confundem um modelo treinado em
   resenhas de filme.
 
-Cada modelo ficou com a entrada que mediu melhor.
+Nessa versão, cada modelo ficou com a entrada que mediu melhor. Depois,
+com a troca do modelo de sentimento (abaixo), os pedaços passaram a ser
+melhores também para o tom, e o resumo foi removido.
+
+### Modelo de sentimento
+
+O primeiro modelo de sentimento foi o padrão do pipeline
+`sentiment-analysis`: `distilbert-base-uncased-finetuned-sst-2-english`,
+treinado em resenhas de filme (SST-2). Ele só conhece positivo e
+negativo, e texto de engenharia é quase todo explicação neutra: a
+confiança média dele nos resumos foi 0,94, mesmo em texto neutro.
+
+Para escolher um substituto com dados, rotulei 79 posts à mão **antes**
+de rodar os modelos (positivo = conquista/melhoria, neutro = explicação
+técnica, negativo = problema/incidente): 63 sorteados, 9 por empresa, e
+16 com títulos de incidente ou falha, para o gabarito ter exemplos
+negativos. O gabarito ficou com 47 neutros, 27 positivos e 5 negativos.
+
+| Modelo · entrada | Acerto | Positivo | Neutro | Negativo |
+|---|---:|---:|---:|---:|
+| SST-2 (resenhas de filme) · resumo | 29% | 70% | 0% | 80% |
+| `bart-large-mnli` (zero-shot) · resumo | 54% | 96% | 26% | 100% |
+| `bart-large-mnli` (zero-shot) · pedaços | 39% | 100% | 0% | 80% |
+| `deberta-v3-xsmall-zeroshot-v1.1-all-33` · resumo | 57% | 63% | 53% | 60% |
+| `deberta-v3-xsmall-zeroshot-v1.1-all-33` · pedaços | 70% | 52% | 79% | 80% |
+| `deberta-v3-base-zeroshot-v2.0` · resumo | 61% | 44% | 68% | 80% |
+| **`deberta-v3-base-zeroshot-v2.0` · pedaços** | **72%** | 59% | 77% | 100% |
+
+(Positivo/Neutro/Negativo = quantos posts de cada classe o modelo
+acertou.) O DeBERTa-base lendo o post inteiro em pedaços foi o melhor e
+é o usado hoje. Com rótulo neutro, os trechos técnicos do meio do post
+deixam de ser empurrados para "negativo", que era o problema do SST-2
+com pedaços. O `xsmall` fica perto (70%) e é ~2,3x mais rápido, uma
+alternativa se o tempo de execução importar mais.
+
+Limitações: o gabarito é pequeno e foi rotulado por uma pessoa só, e
+tem poucos negativos — o que, por si só, já é um achado: blogs de
+engenharia quase nunca enquadram um post como problema.
 
 **Compatibilidade com a etapa 1**: nenhum arquivo da etapa 1 foi
 alterado. `blogs-engenharia-scrape`, `blogs-engenharia-analyze` e
@@ -349,10 +389,9 @@ ficam um nível acima, fora do pacote (ver `../docs/`, `../examples/`).
 │       │   ├── preprocess.py            # etapa 1: limpeza + extração de siglas via RE
 │       │   ├── pipeline.py                # etapa 1: tagging/lematização/NER via spaCy
 │       │   ├── aggregate.py                 # etapa 1: agregação por empresa/ano, Jaccard, termos quentes
-│       │   ├── resumo.py                      # etapa 2: frases/resumo via spaCy (sentencizer)
-│       │   ├── pedacos.py                      # etapa 2: post inteiro em pedaços para os embeddings
+│       │   ├── pedacos.py                     # etapa 2: frases (spaCy sentencizer) + post inteiro em pedaços
 │       │   ├── embeddings.py                    # etapa 2: vetores via sentence-transformers
-│       │   ├── sentiment.py                       # etapa 2: classificação de tom via transformers
+│       │   ├── sentiment.py                       # etapa 2: tom via zero-shot (transformers, DeBERTa)
 │       │   └── semantic.py                          # etapa 2: centróide, cosseno, agregação
 │       └── cli/
 │           ├── scrape.py          # orquestrador da coleta (blogs-engenharia-scrape)
