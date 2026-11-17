@@ -73,10 +73,15 @@ class FakeSentimentClassifier:
 
     Classifica como "POSITIVE" se o texto contém a palavra "great",
     senão "NEGATIVE" — o suficiente pra testar que
-    `classificar_sentimento` repassa rótulo e score corretamente.
+    `pontuar_sentimento_em_lote` repassa rótulo e score corretamente.
+    Recebe uma lista de textos, como o pipeline real em modo lote.
     """
 
-    def __call__(self, texto: str) -> list[dict]:
+    def __call__(self, textos: list[str], **kwargs) -> list[dict]:
+        return [self._classificar(t) for t in textos]
+
+    @staticmethod
+    def _classificar(texto: str) -> dict:
         if "great" in texto.lower():
-            return [{"label": "POSITIVE", "score": 0.95}]
-        return [{"label": "NEGATIVE", "score": 0.80}]
+            return {"label": "POSITIVE", "score": 0.95}
+        return {"label": "NEGATIVE", "score": 0.80}
