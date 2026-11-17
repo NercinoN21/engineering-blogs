@@ -223,7 +223,7 @@ comparar posts por proximidade semântica, e acrescenta uma dimensão que
 a etapa 1 nem tentava medir — o **tom** (sentimento) das discussões.
 
 ```bash
-blogs-engenharia-semantic              # processa os 1157 posts (~15-20 minutos na 1ª vez)
+blogs-engenharia-semantic              # processa os 1157 posts (~3 minutos, + download dos modelos na 1ª vez)
 blogs-engenharia-semantic --limite 50  # só os 50 primeiros, pra testar rápido
 ```
 
@@ -232,23 +232,26 @@ primeira execução; depois ficam em cache). O `--limite` existe
 justamente pra isso — rodar o pipeline inteiro em poucos posts antes de
 soltar o processamento completo.
 
-**Resumo de cada post** (`nlp/resumo.py`): em vez de mandar o post
-inteiro pros modelos (lento e desnecessário), um pipeline spaCy *em
+**Separação de frases** (`nlp/resumo.py`): um pipeline spaCy *em
 branco* — só com o componente `sentencizer`, sem o modelo estatístico
-da etapa 1 — separa as frases e pega as 3 primeiras. O começo de um
-post técnico já concentra o assunto e o tom geral, mesma lógica do
-truncamento em `preprocess.py::limpar_para_nlp`.
+da etapa 1 — separa as frases de cada post. Elas viram duas entradas
+diferentes, uma para cada modelo (ver "Resumo vs. post inteiro" abaixo):
+
+- **pedaços do post inteiro** (`nlp/pedacos.py`): frases consecutivas
+  agrupadas em pedaços de até 150 palavras, que cabem no limite de 256
+  tokens do MiniLM. Os 1.157 posts viram 17.040 pedaços;
+- **resumo**: as 3 primeiras frases do post.
 
 **Embeddings** (`nlp/embeddings.py`): `sentence-transformers` com o
-modelo `all-MiniLM-L6-v2` transforma cada resumo num vetor de 384
-dimensões. Dois posts com o mesmo *significado*, mesmo usando palavras
-diferentes, ficam com vetores próximos — algo que a Jaccard da etapa 1
-não enxerga.
+modelo `all-MiniLM-L6-v2` transforma cada pedaço num vetor de 384
+dimensões; o vetor do post é a média dos seus pedaços. Dois posts com o
+mesmo *significado*, mesmo usando palavras diferentes, ficam com
+vetores próximos — algo que a Jaccard da etapa 1 não enxerga.
 
 **Sentimento** (`nlp/sentiment.py`): o pipeline `sentiment-analysis` da
 `transformers`, com o modelo padrão
-`distilbert-base-uncased-finetuned-sst-2-english`, classifica cada
-resumo como `POSITIVE` ou `NEGATIVE` com um score de confiança. O
+`distilbert-base-uncased-finetuned-sst-2-english`, classifica o
+resumo de cada post como `POSITIVE` ou `NEGATIVE` com um score de confiança. O
 modelo foi treinado em resenhas de filme (SST-2), não em texto técnico
 de engenharia — é uma primeira aproximação concreta do tom, no mesmo
 espírito pragmático da etapa 1 ao usar Jaccard em vez de uma métrica
@@ -270,6 +273,32 @@ Os resultados ficam salvos em 2 tabelas novas no mesmo `data/posts.json`
 impressos no terminal ao rodar. Os embeddings em si não são salvos no
 banco (ficariam pesados e não servem pra consulta direta) — só os
 resultados já agregados.
+
+### Resumo vs. post inteiro
+
+A primeira versão da etapa 2 mandava só o resumo (3 primeiras frases)
+para os dois modelos. Para saber se ler o post inteiro em pedaços era
+melhor, rodei as duas estratégias sobre os 1.157 posts e comparei:
+
+| Métrica | Resumo | Pedaços |
+|---|---:|---:|
+| Embedding do post acha o próprio título entre os 1.157 (top-1) | 58,4% | **68,1%** |
+| Idem, entre os 5 mais próximos (top-5) | 75,6% | **85,6%** |
+| Ranking dos pares de empresas concorda com o da Jaccard (Spearman) | 0,10 | **0,56** |
+| Rótulo de sentimento concorda com o do título | **59,6%** | 57,9% |
+| Posts classificados como positivos | 62% | 30% |
+
+- **Embeddings: pedaços.** O título é um resumo escrito pelo próprio
+  autor, então o vetor que acha o título certo representa melhor o
+  assunto do post. Com pedaços, o ranking também passa a concordar com
+  o da Jaccard, que é um método independente.
+- **Sentimento: resumo.** Com pedaços, nenhuma métrica melhorou e 422
+  posts passaram de positivo para negativo, incluindo posts claramente
+  de conquista ("How Uber Serves over 150 Million Reads per Second..."):
+  os trechos técnicos do meio do post confundem um modelo treinado em
+  resenhas de filme.
+
+Cada modelo ficou com a entrada que mediu melhor.
 
 **Compatibilidade com a etapa 1**: nenhum arquivo da etapa 1 foi
 alterado. `blogs-engenharia-scrape`, `blogs-engenharia-analyze` e
@@ -320,7 +349,8 @@ ficam um nível acima, fora do pacote (ver `../docs/`, `../examples/`).
 │       │   ├── preprocess.py            # etapa 1: limpeza + extração de siglas via RE
 │       │   ├── pipeline.py                # etapa 1: tagging/lematização/NER via spaCy
 │       │   ├── aggregate.py                 # etapa 1: agregação por empresa/ano, Jaccard, termos quentes
-│       │   ├── resumo.py                      # etapa 2: resumo via spaCy (sentencizer)
+│       │   ├── resumo.py                      # etapa 2: frases/resumo via spaCy (sentencizer)
+│       │   ├── pedacos.py                      # etapa 2: post inteiro em pedaços para os embeddings
 │       │   ├── embeddings.py                    # etapa 2: vetores via sentence-transformers
 │       │   ├── sentiment.py                       # etapa 2: classificação de tom via transformers
 │       │   └── semantic.py                          # etapa 2: centróide, cosseno, agregação
