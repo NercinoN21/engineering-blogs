@@ -223,8 +223,8 @@ comparar posts por proximidade semântica, e acrescenta uma dimensão que
 a etapa 1 nem tentava medir — o **tom** (sentimento) das discussões.
 
 ```bash
-blogs-engenharia-semantic              # processa os 1157 posts (~1h30 numa GPU de Mac, + download dos modelos na 1ª vez)
-blogs-engenharia-semantic --limite 50  # só os 50 primeiros, pra testar rápido (~4 min)
+blogs-engenharia-semantic              # processa os 1157 posts (~1h40 numa GPU de Mac, + download dos modelos na 1ª vez)
+blogs-engenharia-semantic --limite 10  # só os 10 primeiros, pra testar rápido (~1 min)
 ```
 
 Bem mais lento que a etapa 1: baixa e roda dois modelos transformer
@@ -232,7 +232,10 @@ Bem mais lento que a etapa 1: baixa e roda dois modelos transformer
 post. O classificador de tom é o gargalo: roda na GPU quando houver
 (`sentiment.py::escolher_dispositivo`; no Mac, MPS é ~9x mais rápido que
 a CPU). O `--limite` existe justamente pra isso — rodar o pipeline
-inteiro em poucos posts antes de soltar o processamento completo.
+inteiro em poucos posts antes de soltar o processamento completo. Mas
+atenção: ele sobrescreve as tabelas da etapa 2 com o resultado parcial,
+então faça uma cópia de `data/posts.json` antes se já tiver a rodada
+completa.
 
 **Post inteiro em pedaços** (`nlp/pedacos.py`): um pipeline spaCy *em
 branco* — só com o componente `sentencizer`, sem o modelo estatístico
@@ -339,6 +342,12 @@ alternativa se o tempo de execução importar mais.
 Limitações: o gabarito é pequeno e foi rotulado por uma pessoa só, e
 tem poucos negativos — o que, por si só, já é um achado: blogs de
 engenharia quase nunca enquadram um post como problema.
+
+Na rodada completa (1.157 posts), 58% dos posts saíram neutros, 38%
+positivos e 4% negativos. Meta é a única empresa com maioria positiva
+(54%), Microsoft a mais neutra (87%) e Slack a que mais fala de
+problemas (14%). O score médio por empresa e ano fica positivo em todas
+as células (+0.09 a +0.48).
 
 **Compatibilidade com a etapa 1**: nenhum arquivo da etapa 1 foi
 alterado. `blogs-engenharia-scrape`, `blogs-engenharia-analyze` e

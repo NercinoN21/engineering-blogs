@@ -14,7 +14,7 @@ Uso:
 Pré-requisito: já ter rodado o scraper (precisa de posts em
 data/posts.json). Bem mais lento que a etapa 1: carrega dois modelos
 transformer (~90MB + ~740MB, baixados na 1ª execução) e roda os dois
-sobre cada pedaço de cada post — ~1h30 para os 1.157 posts numa GPU de
+sobre cada pedaço de cada post — ~1h40 para os 1.157 posts numa GPU de
 Mac (MPS); use --limite para testar.
 """
 
